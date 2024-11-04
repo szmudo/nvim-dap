@@ -1,10 +1,9 @@
-local dap = require('dap')
-local notify = require('dap.utils').notify
+local dap = require("dap")
+local notify = require("dap.utils").notify
 local M = {}
 
 M.json_decode = vim.json.decode
 M.type_to_filetypes = {}
-
 
 ---@class dap.vscode.launch.Input
 ---@field id string
@@ -13,21 +12,20 @@ M.type_to_filetypes = {}
 ---@field default? string
 ---@field options string[]|{label: string, value: string}[]
 
-
 ---@param input dap.vscode.launch.Input
 ---@return function
 local function create_input(input)
   if input.type == "promptString" then
     return function()
-      local description = input.description or 'Input'
-      if not vim.endswith(description, ': ') then
-        description = description .. ': '
+      local description = input.description or "Input"
+      if not vim.endswith(description, ": ") then
+        description = description .. ": "
       end
       if vim.ui.input then
         local co = coroutine.running()
         local opts = {
           prompt = description,
-          default = input.default or '',
+          default = input.default or "",
         }
         vim.ui.input(opts, function(result)
           vim.schedule(function()
@@ -36,7 +34,7 @@ local function create_input(input)
         end)
         return coroutine.yield()
       else
-        return vim.fn.input(description, input.default or '')
+        return vim.fn.input(description, input.default or "")
       end
     end
   elseif input.type == "pickString" then
@@ -52,7 +50,7 @@ local function create_input(input)
       vim.ui.select(options, opts, function(option)
         vim.schedule(function()
           local value = option and option.value or option
-          coroutine.resume(co, value or (input.default or ''))
+          coroutine.resume(co, value or (input.default or ""))
         end)
       end)
       return coroutine.yield()
@@ -65,7 +63,6 @@ local function create_input(input)
     end
   end
 end
-
 
 ---@param inputs dap.vscode.launch.Input[]
 ---@return table<string, function> inputs map from ${input:<id>} to function resolving the input value
@@ -82,7 +79,6 @@ local function create_inputs(inputs)
   end
   return result
 end
-
 
 ---@param inputs table<string, function>
 ---@param value any
@@ -120,7 +116,6 @@ local function apply_input(inputs, value, cache)
   return value
 end
 
-
 ---@param config table<string, any>
 ---@param inputs table<string, function>
 local function apply_inputs(config, inputs)
@@ -132,17 +127,15 @@ local function apply_inputs(config, inputs)
   return result
 end
 
-
 --- Lift properties of a child table to top-level
 local function lift(tbl, key)
   local child = tbl[key]
   if child then
     tbl[key] = nil
-    return vim.tbl_extend('force', tbl, child)
+    return vim.tbl_extend("force", tbl, child)
   end
   return tbl
 end
-
 
 function M._load_json(jsonstr)
   local ok, data = pcall(M.json_decode, jsonstr)
@@ -154,23 +147,23 @@ function M._load_json(jsonstr)
   local has_inputs = next(inputs) ~= nil
 
   local sysname
-  if vim.fn.has('linux') == 1 then
-    sysname = 'linux'
-  elseif vim.fn.has('mac') == 1 then
-    sysname = 'osx'
-  elseif vim.fn.has('win32') == 1 then
-    sysname = 'windows'
+  if vim.fn.has("linux") == 1 then
+    sysname = "linux"
+  elseif vim.fn.has("mac") == 1 then
+    sysname = "osx"
+  elseif vim.fn.has("win32") == 1 then
+    sysname = "windows"
   end
 
   local configs = {}
   for _, config in ipairs(data.configurations or {}) do
     config = lift(config, sysname)
-    if (has_inputs) then
+    if has_inputs then
       config = setmetatable(config, {
         __call = function()
           local c = vim.deepcopy(config)
           return apply_inputs(c, inputs)
-        end
+        end,
       })
     end
     table.insert(configs, config)
@@ -181,31 +174,30 @@ end
 ---@param path string?
 ---@return dap.Configuration[]
 function M.getconfigs(path)
-  local resolved_path = path or (vim.fn.getcwd() .. '/.vscode/launch.json')
+  local resolved_path = path or (vim.fn.getcwd() .. "/.nvim/launch.json") or (vim.fn.getcwd() .. "/.vscode/launch.json")
   if not vim.loop.fs_stat(resolved_path) then
     return {}
   end
   local lines = {}
   for line in io.lines(resolved_path) do
-    if not vim.startswith(vim.trim(line), '//') then
+    if not vim.startswith(vim.trim(line), "//") then
       table.insert(lines, line)
     end
   end
-  local contents = table.concat(lines, '\n')
+  local contents = table.concat(lines, "\n")
   return M._load_json(contents)
 end
 
-
 --- Extends dap.configurations with entries read from .vscode/launch.json
 function M.load_launchjs(path, type_to_filetypes)
-  type_to_filetypes = vim.tbl_extend('keep', type_to_filetypes or {}, M.type_to_filetypes)
+  type_to_filetypes = vim.tbl_extend("keep", type_to_filetypes or {}, M.type_to_filetypes)
   local configurations = M.getconfigs(path)
 
   assert(configurations, "launch.json must have a 'configurations' key")
   for _, config in ipairs(configurations) do
     assert(config.type, "Configuration in launch.json must have a 'type' key")
     assert(config.name, "Configuration in launch.json must have a 'name' key")
-    local filetypes = type_to_filetypes[config.type] or { config.type, }
+    local filetypes = type_to_filetypes[config.type] or { config.type }
     for _, filetype in pairs(filetypes) do
       local dap_configurations = dap.configurations[filetype] or {}
       for i, dap_config in pairs(dap_configurations) do
