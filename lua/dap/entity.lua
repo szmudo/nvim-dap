@@ -7,12 +7,14 @@ M.variable = variable
 
 local types_to_hl_group = {
   boolean = "Boolean",
+  str = "String",
   string = "String",
   int = "Number",
   long = "Number",
   number = "Number",
   double = "Float",
   float = "Float",
+  nonetype = "Constant",
   ["function"] = "Function",
 }
 
@@ -100,10 +102,16 @@ function variable.fetch_children(var, cb)
       elseif resp then
         local variables = resp.variables
         local unloaded = #variables
+        var.variables = variables
+
+        if unloaded == 0 then
+          cb(variables)
+          return
+        end
+
         local function countdown()
           unloaded = unloaded - 1
           if unloaded == 0 then
-            var.variables = variables
             cb(variables)
           end
         end
@@ -218,11 +226,17 @@ local function set_expression(_, item, _, context)
   }
   session:request('setExpression', params, function(err)
     if err then
-      utils.notify('Error on setExpression: ' .. err.message, vim.log.levels.WARN)
+      utils.notify('Error on setExpression: ' .. tostring(err), vim.log.levels.WARN)
     else
       session:_request_scopes(session.current_frame)
     end
   end)
+end
+
+
+---@param item dap.Variable
+local function copy_evalname(_, item, _, _)
+  vim.fn.setreg("", item.evaluateName)
 end
 
 
@@ -242,7 +256,11 @@ variable.tree_spec = {
     end
     local result = {}
     local capabilities = session.capabilities
+    ---@type dap.Variable
     local item = info.item
+    if item.evaluateName then
+      table.insert(result, { label = "Copy as expression", fn = copy_evalname, })
+    end
     if item.evaluateName and capabilities.supportsSetExpression then
       table.insert(result, { label = 'Set expression', fn = set_expression, })
     elseif capabilities.supportsSetVariable then
@@ -344,14 +362,14 @@ function threads_spec.fetch_children(thread, cb)
       local params = { threadId = thread.id }
       local err, resp = session:request('stackTrace', params)
       if err then
-        utils.notify('Error fetching stackTrace: ' .. utils.fmt_error(err), vim.log.levels.WARN)
+        utils.notify('Error fetching stackTrace: ' .. tostring(err), vim.log.levels.WARN)
       else
         thread.frames = resp.stackFrames
       end
       if not is_stopped then
         local err0 = session:request('continue', params)
         if err0 then
-          utils.notify('Error on continue: ' .. utils.fmt_error(err), vim.log.levels.WARN)
+          utils.notify('Error on continue: ' .. tostring(err0), vim.log.levels.WARN)
         else
           thread.stopped = false
           local progress = require('dap.progress')
@@ -399,7 +417,7 @@ function threads_spec.compute_actions(info)
             thread.stopped = false
             session:request('continue', { threadId = thread.id }, function(err)
               if err then
-                utils.notify('Error on continue: ' .. err.message, vim.log.levels.WARN)
+                utils.notify('Error on continue: ' .. tostring(err), vim.log.levels.WARN)
               end
               context.refresh()
             end)

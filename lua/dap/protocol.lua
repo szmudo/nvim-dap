@@ -1,10 +1,8 @@
 ---@meta
 
-
 ---@class dap.ProtocolMessage
 ---@field seq number
 ---@field type "request"|"response"|"event"|string
-
 
 ---@class dap.Request: dap.ProtocolMessage
 ---@field type "request"
@@ -28,7 +26,7 @@
 
 
 ---@class dap.ErrorResponse: dap.Response
----@field message string
+---@field message? "cancelled"|"notStopped"|string
 ---@field body {error?: dap.Message}
 
 
@@ -139,6 +137,8 @@
 ---@field namedVariables? number
 ---@field indexedVariables? number
 ---@field memoryReference? string
+---@field declarationLocationReference? number
+---@field valueLocationReference? number
 ---@field variables? dap.Variable[] resolved variablesReference. Not part of the spec; added by nvim-dap
 ---@field parent? dap.Variable|dap.Scope injected by nvim-dap
 
@@ -156,6 +156,7 @@
 ---@field namedVariables? number
 ---@field indexedVariables? number
 ---@field memoryReference? string
+---@field valueLocationReference? number
 
 
 ---@class dap.VariablePresentationHint
@@ -239,6 +240,24 @@
 ---@field supportsExceptionFilterOptions boolean|nil
 ---@field supportsSingleThreadExecutionRequests boolean|nil
 
+---@class dap.InitializeRequestArguments
+---@field clientId? string
+---@field clientName? string
+---@field adapterId string
+---@field locale string
+---@field linesStartAt1? boolean
+---@field columnsStartAt1? boolean
+---@field pathFormat? "path" | "uri" | string
+---@field supportsVariableType? boolean
+---@field supportsVariablePaging? boolean
+---@field supportsRunInTerminalRequest? boolean
+---@field supportsMemoryReferences? boolean
+---@field supportsProgressReporting? boolean
+---@field supportsInvalidatedEvent? boolean
+---@field supportsMemoryEvent? boolean
+---@field supportsArgsCanBeInterpretedByShell? boolean
+---@field supportsStartDebuggingRequest? boolean
+---@field supportsANSIStyling? boolean
 
 ---@class dap.ExceptionBreakpointsFilter
 ---@field filter string
@@ -263,6 +282,25 @@
 ---@class dap.SetBreakpointsResponse
 ---@field breakpoints dap.Breakpoint[]
 
+
+---@class dap.SetBreakpointsArguments
+---
+--- location of the breakpoint.
+--- Either source.path or source.sourceReference must be specified.
+---@field source dap.Source
+---@field breakpoints? dap.SourceBreakpoint[]
+---@field sourceModified? boolean
+
+
+---@class dap.SourceBreakpoint
+---@field line integer
+---@field column? integer
+---@field condition? string
+---@field hitCondition? string
+---@field logMessage? string
+---@field mode? string
+
+
 ---@class dap.Breakpoint
 ---@field id? number
 ---@field verified boolean
@@ -275,6 +313,7 @@
 ---@field instructionReference? string
 ---@field offset? number
 
+---@class dap.InitializedEvent
 
 ---@class dap.StoppedEvent
 ---@field reason "step"|"breakpoint"|"exception"|"pause"|"entry"|"goto"|"function breakpoint"|"data breakpoint"|"instruction breakpoint"|string;
@@ -287,6 +326,14 @@
 
 ---@class dap.TerminatedEvent
 ---@field restart? any
+
+---@class dap.TerminateArguments
+---@field restart? boolean
+
+---@class dap.DisconnectArguments
+---@field restart? boolean
+---@field terminateDebuggee? boolean requires `supportTerminateDebuggee` capability
+---@field suspendDebuggee? boolean requires `supportSuspendDebuggee` capability
 
 
 ---@class dap.ThreadEvent
@@ -342,6 +389,22 @@
 ---@field request 'launch'|'attach'
 
 
+---@class dap.CompletionsResponse
+---@field targets dap.CompletionItem[]
+
+
+---@class dap.LocationsArguments
+---@field locationReference number
+
+
+---@class dap.LocationsResponse
+---@field source dap.Source
+---@field line integer
+---@field column? integer
+---@field endLine? integer
+---@field endColumn? integer
+
+
 ---@alias dap.CompletionItemType
 ---|'method'
 ---|'function'
@@ -380,5 +443,12 @@
 ---@field selectionStart? number
 ---@field selectionLength? number
 
-
 ---@alias dap.SteppingGranularity 'statement'|'line'|'instruction'
+
+---@class dap.RunInTerminalRequestArguments
+---@field kind? 'integrated'|'external'
+---@field title? string
+---@field cwd string
+---@field args string[]
+---@field env? table<string, string>
+---@field argsCanBeInterpretedByShell? boolean

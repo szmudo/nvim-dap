@@ -1,6 +1,7 @@
 local api = vim.api
 local ui = require('dap.ui')
 local utils = require('dap.utils')
+local prompt = "dap> "
 local M = {}
 
 local history = {
@@ -19,13 +20,28 @@ end
 local execute  -- required for forward reference
 
 
+---@param buf integer
+local function line_count(buf)
+  assert(vim.bo[buf].buftype == "prompt", "buf must have buftype=prompt")
+  if vim.fn.has("nvim-0.12") == 1 then
+    local ok, mark = pcall(api.nvim_buf_get_mark, buf, ":")
+    if ok then
+      return mark[1] - 1
+    end
+  end
+  return api.nvim_buf_line_count(buf) - 1
+end
+
+
 local function new_buf()
   local prev_buf = api.nvim_get_current_buf()
   local buf = api.nvim_create_buf(true, true)
   api.nvim_buf_set_name(buf, string.format('[dap-repl-%d]', buf))
+  vim.b[buf]["dap-srcft"] = vim.bo[prev_buf].filetype
   vim.bo[buf].buftype = "prompt"
   vim.bo[buf].omnifunc = "v:lua.require'dap.repl'.omnifunc"
   vim.bo[buf].buflisted = false
+  vim.bo[buf].tagfunc = "v:lua.require'dap'._tagfunc"
   local path = vim.bo[prev_buf].path
   if path and path ~= "" then
     vim.bo[buf].path = path
@@ -34,7 +50,35 @@ local function new_buf()
   api.nvim_buf_set_keymap(buf, 'n', 'o', "<Cmd>lua require('dap.ui').trigger_actions()<CR>", {})
   api.nvim_buf_set_keymap(buf, 'i', '<up>', "<Cmd>lua require('dap.repl').on_up()<CR>", {})
   api.nvim_buf_set_keymap(buf, 'i', '<down>', "<Cmd>lua require('dap.repl').on_down()<CR>", {})
-  vim.fn.prompt_setprompt(buf, 'dap> ')
+  vim.keymap.set("n", "]]", function()
+    local lnum = api.nvim_win_get_cursor(0)[1] - 1
+    local lines = api.nvim_buf_get_lines(buf, lnum + 1, -1, false)
+    for i, line in ipairs(lines) do
+      if vim.startswith(line, prompt) then
+        api.nvim_win_set_cursor(0, { i + lnum + 1, #line - 1 })
+        break
+      end
+    end
+  end, { buffer = buf, desc = "Move to next prompt" })
+  vim.keymap.set("n", "[[", function()
+    local lnum = api.nvim_win_get_cursor(0)[1] - 1
+    local lines = api.nvim_buf_get_lines(buf, 0, lnum, true)
+    local num_lines = #lines
+    for i = num_lines, 1, -1 do
+      local line = lines[i]
+      if vim.startswith(line, prompt) then
+        api.nvim_win_set_cursor(0, { lnum - (num_lines - i), #line - 1 })
+        break
+      end
+    end
+  end, { buffer = buf, desc = "Move to previous prompt" })
+  api.nvim_create_autocmd("TextYankPost", {
+    buffer = buf,
+    callback = function()
+      require("dap._cmds").yank_evalname()
+    end,
+  })
+  vim.fn.prompt_setprompt(buf, prompt)
   vim.fn.prompt_setcallback(buf, execute)
   if vim.fn.has('nvim-0.7') == 1 then
     vim.keymap.set('n', 'G', function()
@@ -48,7 +92,7 @@ local function new_buf()
         local active_buf = api.nvim_win_get_buf(0)
         if active_buf == buf then
           local lnum = api.nvim_win_get_cursor(0)[1]
-          autoscroll = lnum == api.nvim_buf_line_count(buf)
+          autoscroll = lnum >= line_count(buf)
         end
       end
     })
@@ -64,6 +108,10 @@ local function new_win(buf, winopts, wincmd)
   local win = api.nvim_get_current_win()
   api.nvim_win_set_buf(win, buf)
   if vim.fn.has("nvim-0.11") == 1 then
+    vim.wo[win][0].relativenumber = false
+    vim.wo[win][0].number = false
+    vim.wo[win][0].foldcolumn = "0"
+    vim.wo[win][0].signcolumn = "auto"
     vim.wo[win][0].wrap = false
   else
     vim.wo[win].wrap = false
@@ -154,10 +202,7 @@ end
 
 local function evaluate_handler(err, resp)
   if err then
-    local message = utils.fmt_error(err)
-    if message then
-      M.append(message, nil, { newline = false })
-    end
+    M.append(tostring(err), nil, { newline = true })
     return
   end
   local layer = ui.layer(repl.buf)
@@ -169,16 +214,15 @@ local function evaluate_handler(err, resp)
     -- Appending twice would result in a intermediate "dap> " prompt
     -- To avoid that this eagerly fetches the children; pre-renders the region
     -- and lets tree.render override it
-    local lnum = api.nvim_buf_line_count(repl.buf) - 1
     if spec.has_children(resp) then
       spec.fetch_children(resp, function()
-        tree.render(layer, resp, nil, lnum, -1)
+        tree.render(layer, resp, nil)
       end)
     else
-      tree.render(layer, resp, nil, lnum, -1)
+      tree.render(layer, resp, nil)
     end
   else
-    M.append(resp.result, nil, { newline = false })
+    M.append(resp.result, nil, { newline = true })
   end
 end
 
@@ -217,45 +261,43 @@ local function print_threads(threads)
 end
 
 
-function execute(text)
-  if text == '' then
-    if history.last then
-      text = history.last
-    else
+---@param confname string
+---@return dap.Session?
+local function trystart(confname)
+  assert(coroutine.running() ~= nil, "Must run in coroutine")
+  local dap = require("dap")
+  local bufnr = api.nvim_get_current_buf()
+  for _, get_configs in pairs(dap.providers.configs) do
+    local configs = get_configs(bufnr)
+    for _, config in ipairs(configs) do
+      if confname == config.name then
+        dap.run(config)
+      end
+    end
+  end
+  return dap.session()
+end
+
+
+---@param text string
+---@param opts? dap.repl.execute.Opts
+local function coexecute(text, opts)
+  assert(coroutine.running() ~= nil, "Must run in coroutine")
+  opts = opts or {}
+
+  local session = get_session()
+  if not session then
+    local ft = vim.b["dap-srcft"] or vim.bo.filetype
+    local autostart = require("dap").defaults[ft].autostart
+    if autostart then
+      session = trystart(autostart)
+    end
+    if not session then
+      M.append('No active debug session')
       return
     end
-  else
-    history.last = text
-    if #history.entries == history.max_size then
-      table.remove(history.entries, 1)
-    end
-    table.insert(history.entries, text)
-    history.idx = #history.entries + 1
   end
-
-  local splitted_text = vim.split(text, ' ')
-  local session = get_session()
-  if vim.tbl_contains(M.commands.exit, text) then
-    if session then
-      -- Should result in a `terminated` event which closes the session and sets it to nil
-      session:disconnect()
-    end
-    api.nvim_command('close')
-    return
-  end
-  if vim.tbl_contains(M.commands.help, text) then
-    print_commands()
-    return
-  elseif vim.tbl_contains(M.commands.clear, text) then
-    if repl.buf and api.nvim_buf_is_loaded(repl.buf) then
-      M.clear()
-    end
-    return
-  end
-  if not session then
-    M.append('No active debug session')
-    return
-  end
+  local words = vim.split(text, ' ', { plain = true })
   if vim.tbl_contains(M.commands.continue, text) then
     require('dap').continue()
   elseif vim.tbl_contains(M.commands.next_, text) then
@@ -280,9 +322,9 @@ function execute(text)
   elseif vim.tbl_contains(M.commands.down, text) then
     session:_frame_delta(-1)
     M.print_stackframes()
-  elseif vim.tbl_contains(M.commands.goto_, splitted_text[1]) then
-    if splitted_text[2] then
-      session:_goto(tonumber(splitted_text[2]))
+  elseif vim.tbl_contains(M.commands.goto_, words[1]) then
+    if words[2] then
+      session:_goto(tonumber(words[2]))
     end
   elseif vim.tbl_contains(M.commands.scopes, text) then
     print_scopes(session.current_frame)
@@ -290,27 +332,78 @@ function execute(text)
     print_threads(vim.tbl_values(session.threads))
   elseif vim.tbl_contains(M.commands.frames, text) then
     M.print_stackframes()
-  elseif M.commands.custom_commands[splitted_text[1]] then
-    local command = splitted_text[1]
+  elseif M.commands.custom_commands[words[1]] then
+    local command = words[1]
     local args = string.sub(text, string.len(command)+2)
     M.commands.custom_commands[command](args)
   else
-    session:evaluate(text, evaluate_handler)
+    ---@type dap.EvaluateArguments
+    local params = {
+      expression = text,
+      context = opts.context or "repl"
+    }
+    session:evaluate(params, evaluate_handler)
+  end
+end
+
+
+---@class dap.repl.execute.Opts
+---@field context? "watch"|"repl"|"hover"|"variables"|"clipboard"
+
+
+---@param text string
+---@param opts? dap.repl.execute.Opts
+function execute(text, opts)
+  if text == '' then
+    if history.last then
+      text = history.last
+    else
+      return
+    end
+  else
+    history.last = text
+    if #history.entries == history.max_size then
+      table.remove(history.entries, 1)
+    end
+    table.insert(history.entries, text)
+    history.idx = #history.entries + 1
+  end
+  if vim.tbl_contains(M.commands.exit, text) then
+    local session = get_session()
+    if session then
+      -- Should result in a `terminated` event which closes the session and sets it to nil
+      session:disconnect()
+    end
+    api.nvim_command('close')
+    return
+  end
+  if vim.tbl_contains(M.commands.help, text) then
+    print_commands()
+  elseif vim.tbl_contains(M.commands.clear, text) then
+    if repl.buf and api.nvim_buf_is_loaded(repl.buf) then
+      M.clear()
+    end
+  else
+    require("dap.async").run(function()
+      coexecute(text, opts)
+    end)
   end
 end
 
 
 --- Add and execute text as if entered directly
-function M.execute(text)
-  M.append("dap> " .. text .. "\n", "$", { newline = true })
-  local numlines = api.nvim_buf_line_count(repl.buf)
+---@param text string
+---@param opts? dap.repl.execute.Opts
+function M.execute(text, opts)
+  M.append(prompt .. text, "$", { newline = true })
+  local numlines = line_count(repl.buf)
   if repl.win and api.nvim_win_is_valid(repl.win) then
     pcall(api.nvim_win_set_cursor, repl.win, { numlines, 0 })
     api.nvim_win_call(repl.win, function()
       vim.cmd.normal({"zt", bang = true })
     end)
   end
-  execute(text)
+  execute(text, opts)
 end
 
 
@@ -352,7 +445,7 @@ local function select_history(delta)
   if text then
     local lnum = vim.fn.line('$')
     local lines = vim.split(text, "\n", { plain = true })
-    lines[1] = "dap> " .. lines[1]
+    lines[1] = prompt .. lines[1]
     api.nvim_buf_set_lines(repl.buf, lnum - 1, -1, true, lines)
     vim.fn.setcursorcharpos({ vim.fn.line("$"), vim.fn.col('$') })  -- move cursor to the end of line
   end
@@ -368,39 +461,39 @@ function M.on_down()
 end
 
 
+
 ---@param line string
 ---@param lnum (integer|string)?
 ---@param opts? {newline: boolean}
 function M.append(line, lnum, opts)
   opts = opts or {}
   local buf = repl._init_buf()
-  if api.nvim_get_current_win() == repl.win and lnum == '$' then
-    lnum = nil
-  end
   if vim.bo[buf].fileformat ~= "dos" then
     line = line:gsub('\r\n', '\n')
   end
   local lines = vim.split(line, '\n')
   if lnum == '$' or not lnum then
-    lnum = api.nvim_buf_line_count(buf) - 1
+    lnum = line_count(buf)
     if opts.newline == false then
-      local last_line = api.nvim_buf_get_lines(buf, -2, -1, true)[1]
-      local insert_pos = #last_line
-      if last_line == 'dap> ' then
+      local last_line = api.nvim_buf_get_lines(buf, lnum, lnum + 1, true)[1]
+      local insert_pos = last_line ~= nil and #last_line or 0
+      if last_line == prompt then
         -- insert right in front of the empty prompt
         insert_pos = 0
         if lines[#lines] ~= '' then
           table.insert(lines, #lines + 1, '')
         end
-      elseif vim.startswith(last_line, 'dap> ') then
+      elseif vim.startswith(last_line or "", prompt) then
         table.insert(lines, 1, '')
       end
       api.nvim_buf_set_text(buf, lnum, insert_pos, lnum, insert_pos, lines)
     else
-      api.nvim_buf_set_lines(buf, -1, -1, true, lines)
+      api.nvim_buf_set_lines(buf, lnum, lnum, true, lines)
     end
-  else
+  elseif type(lnum) == "number" then
     api.nvim_buf_set_lines(buf, lnum, lnum, true, lines)
+  else
+    error("Unsupported lnum argument: " .. tostring(lnum))
   end
   if autoscroll and repl.win and api.nvim_win_is_valid(repl.win) then
     pcall(api.nvim_win_set_cursor, repl.win, { lnum + 2, 0 })
@@ -417,13 +510,17 @@ function M.clear()
 end
 
 do
+
+  ---@param candidates dap.CompletionItem[]
   local function completions_to_items(candidates)
-    table.sort(candidates, function(a, b) return (a.sortText or a.label) < (b.sortText or b.label) end)
+    table.sort(candidates, function(a, b)
+      return (a.sortText or a.label) < (b.sortText or b.label)
+    end)
     local items = {}
     for _, candidate in pairs(candidates) do
       table.insert(items, {
-        word = candidate.text or candidate.label;
-        abbr = candidate.label;
+        word = candidate.text or candidate.label,
+        abbr = candidate.label,
         dup = 0;
         icase = 1;
       })
@@ -431,9 +528,11 @@ do
     return items
   end
 
+  --- Finds word boundary for [vim.fn.complete]
+  ---
   ---@param items dap.CompletionItem[]
   ---@return boolean mixed, integer? start
-  local function get_start(items)
+  local function get_start(items, prefix)
     local start = nil
     local mixed = false
     for _, item in ipairs(items) do
@@ -445,6 +544,9 @@ do
           start = item.start
         end
       end
+      if not start and (item.text or item.label):sub(1, #prefix) == prefix then
+        start = 0
+      end
     end
     return mixed, start
   end
@@ -453,7 +555,7 @@ do
     local session = get_session()
     local col = api.nvim_win_get_cursor(0)[2]
     local line = api.nvim_get_current_line()
-    local offset = vim.startswith(line, 'dap> ') and 5 or 0
+    local offset = vim.startswith(line, prompt) and 5 or 0
     local line_to_cursor = line:sub(offset + 1, col)
     local text_match = vim.fn.match(line_to_cursor, '\\k*$')
     if vim.startswith(line_to_cursor, '.') or base ~= '' then
@@ -493,22 +595,33 @@ do
       text = line_to_cursor,
       column = col + 1 - offset
     }
-    session:request('completions', args, function(err, response)
+    ---@param err dap.ErrorResponse?
+    ---@param response dap.CompletionsResponse?
+    local function on_response(err, response)
       if err then
         require('dap.utils').notify('completions request failed: ' .. err.message, vim.log.levels.WARN)
-        return
+      elseif response then
+        local items = response.targets
+        local mixed, start = get_start(items, line_to_cursor)
+        if start and not mixed then
+          vim.fn.complete(offset + start + 1, completions_to_items(items))
+        else
+          vim.fn.complete(offset + text_match + 1, completions_to_items(items))
+        end
       end
-      local items = response.targets --[[@as dap.CompletionItem[]|]]
-      local mixed, start = get_start(items)
-      if start and not mixed then
-        vim.fn.complete(offset + start + 1, completions_to_items(items))
-      else
-        vim.fn.complete(offset + text_match + 1, completions_to_items(items))
-      end
-    end)
+    end
+    session:request('completions', args, on_response)
 
     -- cancel but stay in completion mode for completion via `completions` callback
     return -2
+  end
+end
+
+
+function M._exit()
+  local buf = repl.buf
+  if buf and vim.bo[buf].modified then
+    vim.bo[buf].modified = false
   end
 end
 

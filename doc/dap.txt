@@ -1,4 +1,4 @@
-DAP client                                           *dap.txt*
+*dap.txt*                                         DAP client
 
 
 nvim-dap is a Debug Adapter Protocol client, or "debugger", or "debug-frontend".
@@ -34,7 +34,7 @@ Available debug adapters:
   https://microsoft.github.io/debug-adapter-protocol/implementors/adapters/
 
 Debug adapter configuration and installation instructions:
-  https://github.com/mfussenegger/nvim-dap/wiki/Debug-Adapter-installation
+  https://codeberg.org/mfussenegger/nvim-dap/wiki/Debug-Adapter-installation
 
 Debug Adapter Protocol:
   https://microsoft.github.io/debug-adapter-protocol/
@@ -53,12 +53,12 @@ so, how, you need to configure them via the `dap.adapters` table. The key of
 the table is an arbitrary name that debug adapters are looked up by when using
 a |dap-configuration|.
 
-For example, to register the `debugpy` debug adapter under the type `python` you
-can add the following entry:
+For example, to register the `debugpy` debug adapter you can add the following 
+entry:
 
 >lua
   local dap = require('dap')
-  dap.adapters.python = {
+  dap.adapters.debugpy = {
     type = 'executable';
     command = os.getenv('HOME') .. '/.virtualenvs/tools/bin/python';
     args = { '-m', 'debugpy.adapter' };
@@ -133,7 +133,7 @@ For `server` the following options are supported:
 
 For `pipe` the following options are supported:
 
-
+>
     pipe: string      -- Absolute path to the pipe file.
                       -- If `${pipe}` nvim-dap generates a temporary filename
                       -- that is intended for use with `executable`
@@ -249,7 +249,7 @@ For example:
     local dap = require('dap')
     dap.configurations.python = {
       {
-        type = 'python';
+        type = 'debugpy';
         request = 'launch';
         name = "Launch file";
         program = "${file}";
@@ -326,13 +326,12 @@ DEBUGEE CONFIGURATION via launch.json                *dap-launch.json*
 
 nvim-dap supports a subset of the `launch.json` file format used to configure
 debug adapters in Visual Studio Code.
-
-To load a `launch.json` file, use the `load_launchjs` function from the
-`dap.ext.vscode` module.
+`.vscode/launch.json` are read automatically whenever you start a new debug
+session using |dap.continue()| or `:DapNew`. (via a configuration provider,
+see |dap-providers-configs|)
 
 Unlike VS Code, nvim-dap supports standard JSON. Trailing commas on the
 last item of a list are an error.
-
 If you install a 3rd-party json5 parser you can override the json decode
 function to support json5 features like trailing comma.
 >
@@ -341,23 +340,7 @@ function to support json5 features like trailing comma.
 (One json5 parser implementation is https://github.com/Joakker/lua-json5)
 
 
-load_launchjs({path}, {type_to_filetypes})        *dap.ext.vscode.load_launchjs*
-
-  Parses a JSON file at {path} and adds the entries to `dap.configurations`.
-  Configurations are overwritten by name, so if filetype and name matches a
-  configuration in `dap.configurations`, the config is overwritten by the
-  one loaded from the file at {path}.
-
-  Parameters:
-      {path}    Path to the `launch.json` file. Defaults to
-                `.vscode/launch.json` in the current working directory.
-
-      {type_to_filetypes}  A table mapping `type` values in `launch.json` to
-                           one or more filetypes.
-                           By default, the `type` values in `launch.json` will
-                           be used as filetypes verbatim.
-
-An example `launch.json` might look like this:
+An example `launch.json` looks like this:
 
 >json
   {
@@ -375,15 +358,6 @@ An example `launch.json` might look like this:
           }
       ]
   }
-<
-
-For the above configuration, calling `load_launchjs` adds the first entry to
-`dap.configurations.java` and the second entry to `dap.configurations.cppdbg`.
-If you wanted to add the second entry to the `c` or `cpp` configurations you
-could call `load_launchjs` like this instead:
->
->lua
-  require('dap.ext.vscode').load_launchjs(nil, { cppdbg = {'c', 'cpp'} })
 <
 
 load_launchjs supports `inputs`. Inputs can be used to define custom input prompts.
@@ -409,7 +383,7 @@ Inputs can be referenced with `${input:<id>}` placeholders.
       "version": "0.2.0",
       "configurations": [
           {
-              "type": "python",
+              "type": "debugpy",
               "request": "launch",
               "name": "Launch",
               "program": "${input:myPrompt}"
@@ -547,6 +521,41 @@ Some example mappings you could configure:
 <
 
 ==============================================================================
+USER COMMANDS                                             *dap-user-commands*
+
+nvim-dap provides the following user commands.
+
+Session management:
+
+- `DapContinue`: Continue executing a paused session or start a new one
+- `DapDisconnect`: Disconnect from an active debugging session
+- `DapNew`: Start one or more new debug sessions
+- `DapTerminate`: Terminate the current session
+
+Stepping:
+
+- `DapRestartFrame`: Restart the active sessions' current frame
+- `DapStepInto`: Step into the current expression
+- `DapStepOut`: Step out of the current scope
+- `DapStepOver`: Step over the current line
+- `DapPause`: Pause the current thread or pick a thread to pause
+
+REPL:
+
+- `DapEval`: Create a new window & buffer to evaluate expressions
+- `DapToggleRepl`: Open or close the REPL
+
+Breakpoints:
+
+- `DapClearBreakpoints` : Clear all breakpoints
+- `DapToggleBreakpoint` : Set or remove a breakpoint at the current line
+
+Diagnostics:
+
+- `DapSetLogLevel` : Set the log level
+- `DapShowLog` : Show the session log in a split window
+
+==============================================================================
 CLIENT CONFIGURATION                                             *dap.defaults*
 
 nvim-dap has a few client configuration options which you can either set
@@ -563,6 +572,9 @@ The configuration values are set via `dap.defaults.fallback` (for global) or
   the integrated terminal. (See |dap-terminal|). Either a string or a function
   that must return a buffer number and a window number of the buffer/window
   for the terminal.
+  When using a function, it receives the current debug configuration as an 
+  argument, allowing for dynamic terminal naming and setup based on the 
+  session's configuration.
 
   Note that extensions like `nvim-dap-ui` use this to control the UI.
   If you customize it, you may break their behavior.
@@ -576,15 +588,19 @@ The configuration values are set via `dap.defaults.fallback` (for global) or
   threads to be able to stop, you may want to set this to false.
   Defaults to true.
 
-- switchbuf. (string). Controls the behavior when jumping to a breakpoint.
-                       See |'switchbuf'|. Defaults to the global `'switchbuf'`
-                       setting.
+- switchbuf. (string|fun). Controls the behavior when jumping to a
+  breakpoint. See |'switchbuf'|. Defaults to the global `'switchbuf'` setting.
 
-                       nvim-dap provides an additional `usevisible` option
-                       that can be used to prevent jumps within the active
-                       window if a stopped event is within the visible region.
-                       Best used in combination with other options. For
-                       example: 'usevisible,usetab,uselast'
+  nvim-dap provides an additional `usevisible` option
+  that can be used to prevent jumps within the active
+  window if a stopped event is within the visible region.
+  Best used in combination with other options. For
+  example: 'usevisible,usetab,uselast'
+
+  For more complex use cases, nvim-dap allows overriding with a function. The
+  function receives 3 arguments: (bufnr, line, column). It has full control of
+  how Neovim should behave and it is not expected to return anything.
+
 
 - `on_output`. A function with two parameters: `session` and `output_event`:
   Overrides the default output handling with a custom handler.
@@ -602,6 +618,10 @@ The configuration values are set via `dap.defaults.fallback` (for global) or
   dap.defaults.fallback.on_output = function(session, output_event)
     -- ignore all outputs
   end
+
+
+- `autostart`. Name of a configuration to start implicitly if evaluating an
+  expression in the REPL without active session.
 <
 
 Some more examples:
@@ -609,10 +629,12 @@ Some more examples:
   local dap = require('dap')
   -- Use "tabnew" for all debug adapters
   dap.defaults.fallback.terminal_win_cmd = 'tabnew'
-  -- Except for python
-  dap.defaults.python.terminal_win_cmd = 'belowright new'
+  -- Except for debugpy
+  dap.defaults.debugpy.terminal_win_cmd = 'belowright new'
 
   dap.defaults.java.auto_continue_if_many_stopped = false
+
+  dap.defaults.fallback.autostart = "nluarepl"
 <
 
 ==============================================================================
@@ -731,24 +753,41 @@ restart({config})                                                *dap.restart()*
           configuration used to start the current session.
 
 
-terminate(terminate_opts, disconnect_opts, cb),                                           *dap.terminate()*
+terminate(opts),                                              *dap.terminate()*
         Terminates the debug session.
 
         If the debug adapter doesn't support the `terminateRequest`
         capability, this will instead call |dap.disconnect()| with
         `terminateDebugee = true`.
 
+        If disconnect is used, the `terminateDebugee` and `suspendDebugee`
+        options will only take effect if the debug adapter has the
+        corresponding capabilities.
+
         Parameters: ~
-            {terminate_opts}      Options for the `terminate` request.
-                                  Defaults to empty.
-                                  Not used if |dap.disconnect| is used.
+            {opts}  Table containing:
 
-            {disconnect_opts}     Opts for |dap.disconnect|
-                                  Defaults to `{ terminateDebuggee = true }`
+                     - `terminate_args`: table; used if terminate is supported:
+                       - `restart: boolean?
 
-            {cb}                  Callback that is invoked once the session
-                                  terminated or immediately if no session is
-                                  active.
+                     - `disconnect_args`: table; used if terminate is not
+                       supported:
+                       - `restart`: `boolean?`
+                       - `terminateDebugee`: `boolean?`
+                       - `suspendDebugee`: `boolean?`
+
+                     - `on_done`: function triggered once terminate or
+                       disconnect completes
+
+                     - `all`: `boolean`: flag indicating that all root sessions
+                       should be terminated instead of only the currently
+                       focused session. Defaults to false
+
+                     - `hierarchy`: `boolean`: flag indicating that child and
+                       parent sessions should be terminated. This will affect
+                       the current focused session unless combined with `all`,
+                       in that case it terminates all root sessions including
+                       all their children.
 
 
 set_breakpoint({condition}, {hit_condition}, {log_message})
@@ -818,10 +857,10 @@ set_exception_breakpoints({filters}, {exceptionOptions})
     Or per config/adapter type:
 
 >lua
-        require('dap').defaults.python.exception_breakpoints = {'raised'}
+        require('dap').defaults.debugpy.exception_breakpoints = {'raised'}
 <
 
-    In this example `python` is the type. This is the same type used in
+    In this example `debugpy` is the type. This is the same type used in
     |dap-configuration| or the |dap-adapter| definition.
 
 
@@ -1247,6 +1286,9 @@ For events, the listeners are called with two arguments:
 2. The event payload
 
 
+Both command and event listeners can return a boolean `true` to remove the
+registered listener.
+
 ==============================================================================
 BUILT-IN CLIENT EVENTS                                     *dap-listeners-ext*
 
@@ -1257,9 +1299,10 @@ client.
 Currently there are:
 
 - `dap.listeners.on_config` (See |dap-listeners-on_config|)
+- `dap.listeners.on_session` (See |dap-listeners-on_session|)
 
 ==============================================================================
-ON_CONFIG EXTENSIONS API                              *dap-listeners-on_config*
+ON_CONFIG LISTENER                                    *dap-listeners-on_config*
 
 
 Plugins can pre-process the |dap-configuration| whenever a debug session
@@ -1275,7 +1318,7 @@ parameter and must return a |dap-configuration|.
 
 Before making modifications to the config you should copy it, to ensure you
 don't make permanent changes to a configuration stored within
-`dap.configrations.<filetype>` via mutations.
+`dap.configurations.<filetype>` via mutations.
 
 Example:
 >lua
@@ -1294,6 +1337,35 @@ should prefer using the `enrich_config` function available in |dap-adapter|.
 If you are not owning the adapter definition but the plugin's functionality is
 still specific to a limited selection of adapters, please make sure you're not
 messing with configurations used with adapters foreign to your plugin.
+
+==============================================================================
+ON_SESSION LISTENER                                  *dap-listeners-on_session*
+
+`on_session` listeners can be used to listen to session changes. Opposed to
+the initialize and terminated events from debug adapters - to which you
+could listen to using |dap-listeners| - `on_session` listeners are also called
+whenever the focused session changes. The full list of triggers is:
+
+- New sessions
+- Focused session changes
+- Last remaining session finishes
+
+A listener is a function with two parameters, the old session and the new
+session.
+
+To register a `on_session` listener, add an entry to the
+`dap.listeners.on_session` table. For example:
+>lua
+  local dap = require("dap")
+  dap.listeners.on_session["dummy-noop"] = function(old, new)
+    if new then
+      vim.print("New session: ", new.id)
+    end
+  end
+<
+As with other listeners, `dummy-noop` in the example above is an arbitrary
+name. Plugins should namespace those with their name to avoid conflicts with
+others.
 
 ==============================================================================
 PROVIDERS EXTENSIONS API                                       *dap-providers*
